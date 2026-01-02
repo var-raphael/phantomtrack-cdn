@@ -162,23 +162,25 @@
             ...additionalData
         };
         
+        // Try sendBeacon for leave/end events
         if ((eventType === 'leave' || eventType === 'pageview_end') && navigator.sendBeacon) {
             try {
-                const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+                const blob = new Blob([JSON.stringify(data)], { type: 'text/plain' });
                 const sent = navigator.sendBeacon(endpoint, blob);
                 
                 if (sent) {
                     return;
                 }
             } catch (e) {
-                // Ignore error
+                // Fallback to fetch
             }
         }
         
+        // NUCLEAR OPTION: Use text/plain to avoid CORS preflight
         fetch(endpoint, {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'text/plain'  // ← No preflight triggered!
             },
             body: JSON.stringify(data),
             keepalive: true
