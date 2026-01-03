@@ -60,7 +60,7 @@
         if (currentHost === 'localhost' || currentHost === '127.0.0.1' || currentHost.startsWith('192.168.')) {
             endpoint = 'track';
         } else {
-            endpoint = 'https://phantomtrack.unaux.com/track';
+            endpoint = 'https://phantomtrack.xyz/track';
         }
     }
     
