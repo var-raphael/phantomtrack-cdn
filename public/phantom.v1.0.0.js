@@ -1,5 +1,5 @@
 /**
- * PhantomTrack - Universal Analytics
+ * PhantomTrack - Universal Analytics with Callback Support
  * One script tag. Any website. Zero config.
  */
 (function() {
@@ -153,7 +153,7 @@
         };
     }
     
-    function sendData(eventType, additionalData, retryCount) {
+    function sendData(eventType, additionalData, retryCount, callback) {
         retryCount = retryCount || 0;
         
         const data = {
@@ -162,13 +162,21 @@
             ...additionalData
         };
         
-        // Try sendBeacon for leave/end events
+        // Try sendBeacon for leave/end events (no callback support)
         if ((eventType === 'leave' || eventType === 'pageview_end') && navigator.sendBeacon) {
             try {
                 const blob = new Blob([JSON.stringify(data)], { type: 'text/plain' });
                 const sent = navigator.sendBeacon(endpoint, blob);
                 
                 if (sent) {
+                    // Execute callback immediately for sendBeacon
+                    if (callback && typeof callback === 'function') {
+                        try {
+                            callback(true, null);
+                        } catch (e) {
+                            // Ignore callback errors
+                        }
+                    }
                     return;
                 }
             } catch (e) {
@@ -176,11 +184,11 @@
             }
         }
         
-        // NUCLEAR OPTION: Use text/plain to avoid CORS preflight
+        // Use text/plain to avoid CORS preflight
         fetch(endpoint, {
             method: 'POST',
             headers: {
-                'Content-Type': 'text/plain'  // ← No preflight triggered!
+                'Content-Type': 'text/plain'
             },
             body: JSON.stringify(data),
             keepalive: true
@@ -193,16 +201,39 @@
             } else if (response.status === 429) {
                 if (retryCount < MAX_RETRIES) {
                     setTimeout(function() {
-                        sendData(eventType, additionalData, retryCount + 1);
+                        sendData(eventType, additionalData, retryCount + 1, callback);
                     }, RETRY_DELAY * (retryCount + 1));
+                } else {
+                    throw new Error('Rate limited after retries');
+                }
+            } else {
+                throw new Error('HTTP ' + response.status);
+            }
+        })
+        .then(function(result) {
+            // Success - execute callback
+            if (callback && typeof callback === 'function') {
+                try {
+                    callback(true, result);
+                } catch (e) {
+                    // Ignore callback errors
                 }
             }
         })
         .catch(function(error) {
             if (retryCount < MAX_RETRIES) {
                 setTimeout(function() {
-                    sendData(eventType, additionalData, retryCount + 1);
+                    sendData(eventType, additionalData, retryCount + 1, callback);
                 }, RETRY_DELAY * (retryCount + 1));
+            } else {
+                // Failed after retries - execute callback with error
+                if (callback && typeof callback === 'function') {
+                    try {
+                        callback(false, error);
+                    } catch (e) {
+                        // Ignore callback errors
+                    }
+                }
             }
         });
     }
@@ -301,10 +332,32 @@
     }
     
     window.phantom = {
-        track: function(eventName, properties) {
+        /**
+         * Track custom events with optional callback
+         * @param {string} eventName - Name of the event to track
+         * @param {object} properties - Optional properties object
+         * @param {function} callback - Optional callback function(success, result)
+         * 
+         * Usage:
+         * phantom.track('button_clicked'); // Simple
+         * phantom.track('purchase', { amount: 50 }); // With properties
+         * phantom.track('signup', { plan: 'pro' }, function(success, result) {
+         *     if (success) {
+         *         window.location.href = '/dashboard';
+         *     }
+         * }); // With callback
+         */
+        track: function(eventName, properties, callback) {
             try {
                 if (!eventName || typeof eventName !== 'string') {
                     return;
+                }
+                
+                // Handle overloaded parameters
+                // track('event', callback) - properties is actually callback
+                if (typeof properties === 'function' && !callback) {
+                    callback = properties;
+                    properties = {};
                 }
                 
                 if (eventName.length > 100) {
@@ -318,19 +371,31 @@
                     propertiesJSON = JSON.stringify(properties);
                     
                     if (propertiesJSON.length > 10000) {
+                        if (callback && typeof callback === 'function') {
+                            callback(false, new Error('Properties too large'));
+                        }
                         return;
                     }
                 } catch (e) {
+                    if (callback && typeof callback === 'function') {
+                        callback(false, e);
+                    }
                     return;
                 }
                 
                 sendData('custom_event', {
                     event_name: eventName,
                     event_properties: propertiesJSON
-                });
+                }, 0, callback);
                 
             } catch (e) {
-                // Ignore error
+                if (callback && typeof callback === 'function') {
+                    try {
+                        callback(false, e);
+                    } catch (err) {
+                        // Ignore callback errors
+                    }
+                }
             }
         },
         
@@ -338,9 +403,10 @@
             return sessionId;
         },
         
-        version: '1.0.0'
+        version: '1.1.0'
     };
     
+    // Alias for backward compatibility
     window.phantom.event = window.phantom.track;
     
     function init() {
