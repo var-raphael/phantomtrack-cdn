@@ -1,6 +1,7 @@
 /**
  * PhantomTrack - Universal Analytics with Callback Support
  * One script tag. Any website. Zero config.
+ * Supports: plain HTML, Next.js, React, Vue, SvelteKit, and any SPA.
  */
 (function() {
     'use strict';
@@ -79,6 +80,7 @@
     let isActive = true;
     let heartbeatTimer = null;
     let inactivityTimer = null;
+    let currentPath = window.location.pathname;
     
     function generateSessionId() {
         let randomPart;
@@ -169,7 +171,6 @@
                 const sent = navigator.sendBeacon(endpoint, blob);
                 
                 if (sent) {
-                    // Execute callback immediately for sendBeacon
                     if (callback && typeof callback === 'function') {
                         try {
                             callback(true, null);
@@ -211,7 +212,6 @@
             }
         })
         .then(function(result) {
-            // Success - execute callback
             if (callback && typeof callback === 'function') {
                 try {
                     callback(true, result);
@@ -226,7 +226,6 @@
                     sendData(eventType, additionalData, retryCount + 1, callback);
                 }, RETRY_DELAY * (retryCount + 1));
             } else {
-                // Failed after retries - execute callback with error
                 if (callback && typeof callback === 'function') {
                     try {
                         callback(false, error);
@@ -330,6 +329,62 @@
             // Ignore error
         }
     }
+
+    // ── SPA route change detection ─────────────────────────────────────────────
+    // Works for Next.js (<Link>), React Router, Vue Router, SvelteKit, and any
+    // framework that uses history.pushState for client-side navigation.
+    // Without this, the script only fires once on initial load and misses all
+    // subsequent page navigations since the browser never reloads the page.
+
+    function handleRouteChange() {
+        try {
+            // Only fire if the path actually changed — ignore hash/query-only changes
+            const newPath = window.location.pathname;
+            if (newPath === currentPath) return;
+            currentPath = newPath;
+
+            // End session for the page we just left
+            updateActiveTime();
+            const timeSpent = Math.round(activeTime / 1000);
+            sendData('pageview_end', { timespent: timeSpent });
+
+            // Reset all state for the new page
+            activeTime = 0;
+            lastActivityTime = Date.now();
+            isActive = true;
+            window.__phantomPageLeft = false;
+            sessionId = generateSessionId();
+
+            // Small delay so window.location.href reflects the new URL
+            setTimeout(function() {
+                sendData('pageview');
+            }, 0);
+
+        } catch (e) {
+            // Ignore error
+        }
+    }
+
+    // Patch history.pushState — this is what Next.js <Link>, React Router
+    // <Link>, and most SPA routers call internally on every navigation.
+    // The browser fires no native event for pushState so we intercept it here.
+    const _pushState = history.pushState.bind(history);
+    history.pushState = function(state, title, url) {
+        _pushState(state, title, url);
+        handleRouteChange();
+    };
+
+    // Patch history.replaceState too — covers redirects and replace navigations
+    const _replaceState = history.replaceState.bind(history);
+    history.replaceState = function(state, title, url) {
+        _replaceState(state, title, url);
+        handleRouteChange();
+    };
+
+    // popstate fires on browser back/forward button clicks
+    window.addEventListener('popstate', handleRouteChange, { passive: true });
+
+    // ── End SPA route change detection ────────────────────────────────────────
     
     window.phantom = {
         /**
@@ -337,15 +392,13 @@
          * @param {string} eventName - Name of the event to track
          * @param {object} properties - Optional properties object
          * @param {function} callback - Optional callback function(success, result)
-         * 
+         *
          * Usage:
-         * phantom.track('button_clicked'); // Simple
-         * phantom.track('purchase', { amount: 50 }); // With properties
+         * phantom.track('button_clicked');
+         * phantom.track('purchase', { amount: 50 });
          * phantom.track('signup', { plan: 'pro' }, function(success, result) {
-         *     if (success) {
-         *         window.location.href = '/dashboard';
-         *     }
-         * }); // With callback
+         *     if (success) window.location.href = '/dashboard';
+         * });
          */
         track: function(eventName, properties, callback) {
             try {
@@ -353,8 +406,6 @@
                     return;
                 }
                 
-                // Handle overloaded parameters
-                // track('event', callback) - properties is actually callback
                 if (typeof properties === 'function' && !callback) {
                     callback = properties;
                     properties = {};
@@ -403,7 +454,7 @@
             return sessionId;
         },
         
-        version: '1.1.0'
+        version: '1.2.0'
     };
     
     // Alias for backward compatibility
@@ -414,30 +465,30 @@
             sendData('pageview');
             
             const activityEvents = [
-                'mousedown', 
-                'mousemove', 
-                'keypress', 
-                'scroll', 
-                'touchstart', 
+                'mousedown',
+                'mousemove',
+                'keypress',
+                'scroll',
+                'touchstart',
                 'click'
             ];
             
             activityEvents.forEach(function(event) {
-                document.addEventListener(event, markActive, { 
-                    passive: true, 
-                    capture: false 
+                document.addEventListener(event, markActive, {
+                    passive: true,
+                    capture: false
                 });
             });
             
-            document.addEventListener('visibilitychange', handleVisibilityChange, { 
-                passive: true 
+            document.addEventListener('visibilitychange', handleVisibilityChange, {
+                passive: true
             });
             
-            window.addEventListener('beforeunload', handlePageLeave, { 
-                capture: true 
+            window.addEventListener('beforeunload', handlePageLeave, {
+                capture: true
             });
-            window.addEventListener('pagehide', handlePageLeave, { 
-                passive: true 
+            window.addEventListener('pagehide', handlePageLeave, {
+                passive: true
             });
             
             inactivityTimer = setTimeout(markInactive, INACTIVITY_THRESHOLD);
